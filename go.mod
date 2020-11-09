@@ -8,9 +8,9 @@ require (
 	arhat.dev/libext v0.4.1
 	arhat.dev/pkg v0.3.1
 	ext.arhat.dev/runtimeutil v0.1.2
-	github.com/containers/common v0.22.0
+	github.com/containers/common v0.26.2
 	github.com/containers/image/v5 v5.7.0
-	github.com/containers/podman/v2 v2.0.0-00010101000000-000000000000
+	github.com/containers/podman/v2 v2.1.1
 	github.com/containers/storage v1.23.6
 	github.com/opencontainers/image-spec v1.0.2-0.20190823105129-775207bd45b6
 	github.com/opencontainers/runtime-spec v1.0.3-0.20200817204227-f9c09b4ea1df
@@ -23,14 +23,12 @@ require (
 
 // podman v2.1.1
 replace (
-	github.com/Microsoft/go-winio => github.com/Microsoft/go-winio v0.4.14
 	github.com/container-storage-interface/spec => github.com/container-storage-interface/spec v1.3.0
 	github.com/containerd/containerd => github.com/containerd/containerd v1.3.4
 	github.com/containernetworking/cni => github.com/containernetworking/cni v0.8.0
 	github.com/containernetworking/plugins => github.com/containernetworking/plugins v0.8.7
 	github.com/containers/buildah => github.com/containers/buildah v1.16.1
 	github.com/containers/common => github.com/containers/common v0.26.2
-	github.com/containers/conmon => github.com/containers/conmon v0.4.1-0.20200908203337-35a2fa83022e
 	github.com/containers/image/v5 => github.com/containers/image/v5 v5.7.0
 	github.com/containers/podman/v2 => github.com/containers/podman/v2 v2.1.1
 	github.com/containers/psgo => github.com/containers/psgo v1.5.1
@@ -93,4 +91,60 @@ replace (
 	k8s.io/sample-apiserver => github.com/kubernetes/sample-apiserver v0.18.10
 	k8s.io/utils => github.com/kubernetes/utils v0.0.0-20200821003339-5e75c0163111
 	vbom.ml/util => github.com/fvbommel/util v0.0.2
+)
+
+replace (
+	cloud.google.com/go => cloud.google.com/go v0.63.0
+	github.com/Microsoft/go-winio => github.com/Microsoft/go-winio v0.4.14
+	github.com/Microsoft/hcsshim => github.com/Microsoft/hcsshim v0.8.9
+	github.com/OpenPeeDeeP/depguard => github.com/OpenPeeDeeP/depguard v1.0.1
+	github.com/PuerkitoBio/purell => github.com/PuerkitoBio/purell v1.1.1
+	github.com/StackExchange/wmi => github.com/StackExchange/wmi v0.0.0-20190523213315-cbe66965904d
+	github.com/alecthomas/participle => github.com/alecthomas/participle v0.5.0
+	github.com/alecthomas/units => github.com/alecthomas/units v0.0.0-20190924025748-f65c72e2690d
+	github.com/asaskevich/govalidator => github.com/asaskevich/govalidator v0.0.0-20200428143746-21a406dcc535
+	github.com/aws/aws-sdk-go => github.com/aws/aws-sdk-go v1.31.7
+	github.com/aws/aws-sdk-go-v2 => github.com/aws/aws-sdk-go-v2 v0.23.0
+	github.com/containerd/typeurl => github.com/containerd/typeurl v1.0.1
+	github.com/creack/pty => github.com/creack/pty v1.1.11
+	github.com/docker/docker => github.com/docker/engine v17.12.0-ce-rc1.0.20200618181300-9dc6525e6118+incompatible
+	github.com/docker/spdystream => github.com/docker/spdystream v0.0.0-20181023171402-6480d4af844c
+	github.com/dsnet/golib => github.com/dsnet/golib v0.0.0-20190531212259-571cdbcff553
+	github.com/fsnotify/fsnotify => github.com/fsnotify/fsnotify v1.4.9
+	github.com/golang/protobuf => github.com/golang/protobuf v1.4.2
+	github.com/google/gofuzz => github.com/google/gofuzz v1.0.0
+	github.com/gorilla/mux => github.com/gorilla/mux v1.8.0
+	github.com/jmespath/go-jmespath => github.com/jmespath/go-jmespath v0.3.0
+	github.com/pion/dtls/v2 => github.com/pion/dtls/v2 v2.0.3
+	github.com/spf13/cobra => github.com/spf13/cobra v1.1.1
+	github.com/stretchr/testify => github.com/stretchr/testify v1.6.1
+	go.etcd.io/etcd => go.etcd.io/etcd v0.5.0-alpha.5.0.20200329194405-dd816f0735f8
+	go.uber.org/atomic => go.uber.org/atomic v1.6.0
+	go.uber.org/zap => go.uber.org/zap v1.15.0
+	google.golang.org/api => google.golang.org/api v0.21.0
+	google.golang.org/appengine => google.golang.org/appengine v1.6.6
+	google.golang.org/grpc => github.com/grpc/grpc-go v1.33.1
+	gopkg.in/yaml.v2 => gopkg.in/yaml.v2 v2.3.0
+)
+
+// prometheus related
+replace (
+	github.com/prometheus-community/windows_exporter => github.com/prometheus-community/windows_exporter v0.15.0
+	github.com/prometheus/client_golang => github.com/prometheus/client_golang v1.8.0
+	github.com/prometheus/client_model => github.com/prometheus/client_model v0.2.0
+	github.com/prometheus/common => github.com/prometheus/common v0.14.0
+	github.com/prometheus/node_exporter => github.com/prometheus/node_exporter v1.0.1
+	github.com/prometheus/procfs => github.com/prometheus/procfs v0.1.3
+	honnef.co/go/tools => honnef.co/go/tools v0.0.1-2020.1.5
+)
+
+// azure autorest
+replace (
+	github.com/Azure/go-autorest => github.com/Azure/go-autorest v14.2.0+incompatible
+	github.com/Azure/go-autorest/autorest => github.com/Azure/go-autorest/autorest v0.11.3
+	github.com/Azure/go-autorest/autorest/adal => github.com/Azure/go-autorest/autorest/adal v0.9.1
+	github.com/Azure/go-autorest/autorest/date => github.com/Azure/go-autorest/autorest/date v0.2.0
+	github.com/Azure/go-autorest/autorest/mocks => github.com/Azure/go-autorest/autorest/mocks v0.3.0
+	github.com/Azure/go-autorest/autorest/to => github.com/Azure/go-autorest/autorest/to v0.4.0
+	github.com/Azure/go-autorest/autorest/validation => github.com/Azure/go-autorest/autorest/validation v0.2.0
 )
