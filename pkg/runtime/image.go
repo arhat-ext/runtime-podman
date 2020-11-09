@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package libpod
+package runtime
 
 import (
 	"context"
@@ -22,16 +22,29 @@ import (
 	"os"
 
 	"arhat.dev/aranya-proto/aranyagopb/runtimepb"
+	"arhat.dev/pkg/wellknownerrors"
 	imagetypes "github.com/containers/image/v5/types"
 	libpodimage "github.com/containers/podman/v2/libpod/image"
 	libpodutil "github.com/containers/podman/v2/pkg/util"
 	imagespec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
+func (r *libpodRuntime) DeleteImages(
+	ctx context.Context, options *runtimepb.ImageDeleteCmd,
+) (*runtimepb.ImageStatusListMsg, error) {
+	return nil, wellknownerrors.ErrNotSupported
+}
+
+func (r *libpodRuntime) ListImages(
+	ctx context.Context, options *runtimepb.ImageListCmd,
+) (*runtimepb.ImageStatusListMsg, error) {
+	return nil, wellknownerrors.ErrNotSupported
+}
+
 func (r *libpodRuntime) getImageConfig(ctx context.Context, image *libpodimage.Image) (*imagespec.ImageConfig, error) {
 	imageData, err := image.Inspect(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to inspect image: %v", err)
+		return nil, fmt.Errorf("failed to inspect image: %w", err)
 	}
 
 	if imageData == nil {
@@ -51,12 +64,13 @@ var pullTypeMapping = map[runtimepb.ImagePullPolicy]libpodutil.PullType{
 	runtimepb.IMAGE_PULL_NEVER:          libpodutil.PullImageNever,
 }
 
-func (r *libpodRuntime) ensureImages(images map[string]*runtimepb.ImagePullSpec) (map[string]*libpodimage.Image, error) {
-	var (
-		pulledImages = make(map[string]*libpodimage.Image)
-	)
+func (r *libpodRuntime) ensureImages(
+	ctx context.Context,
+	images map[string]*runtimepb.ImagePullSpec,
+) (map[string]*libpodimage.Image, error) {
+	pulledImages := make(map[string]*libpodimage.Image)
 
-	ctx, cancel := r.ImageActionContext()
+	ctx, cancel := r.ImageActionContext(ctx)
 	defer cancel()
 
 	for imageName, spec := range images {

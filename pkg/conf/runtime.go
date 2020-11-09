@@ -11,6 +11,8 @@ import (
 type RuntimeConfig struct {
 	DataDir string `json:"dataDir" yaml:"dataDir"`
 
+	ManagementNamespace string `json:"managementNamespace" yaml:"managementNamespace"`
+
 	PauseImage   string   `json:"pauseImage" yaml:"pauseImage"`
 	PauseCommand []string `json:"pauseCommand" yaml:"pauseCommand"`
 

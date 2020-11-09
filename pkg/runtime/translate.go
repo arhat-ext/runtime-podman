@@ -14,35 +14,26 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package libpod
+package runtime
 
 import (
 	"bufio"
-	"fmt"
+	"context"
 	"io"
 	"os"
 
 	"arhat.dev/aranya-proto/aranyagopb/aranyagoconst"
 	"arhat.dev/aranya-proto/aranyagopb/runtimepb"
-	"arhat.dev/pkg/log"
+	"arhat.dev/pkg/iohelper"
+	"ext.arhat.dev/runtimeutil"
 	"github.com/containers/podman/v2/libpod"
 	"github.com/containers/podman/v2/libpod/define"
-
-	"ext.arhat.dev/runtime-podman/pkg/constant"
 )
-
-type fakeWriterCloser struct {
-	io.Writer
-}
-
-func (f *fakeWriterCloser) Close() error {
-	return nil
-}
 
 func (r *libpodRuntime) translateStreams(stdin io.Reader, stdout, stderr io.Writer) *define.AttachStreams {
 	return &define.AttachStreams{
-		OutputStream: &fakeWriterCloser{stdout},
-		ErrorStream:  &fakeWriterCloser{stderr},
+		OutputStream: iohelper.NopWriteCloser(stdout),
+		ErrorStream:  iohelper.NopWriteCloser(stderr),
 		InputStream:  bufio.NewReader(stdin),
 		AttachOutput: stdout != nil,
 		AttachError:  stderr != nil,
@@ -50,14 +41,21 @@ func (r *libpodRuntime) translateStreams(stdin io.Reader, stdout, stderr io.Writ
 	}
 }
 
-func (r *libpodRuntime) doHookAction(logger log.Interface, ctr *libpod.Container, hook *runtimepb.ContainerAction) error {
-	_ = logger
+func (r *libpodRuntime) doHookAction(ctx context.Context, ctr *libpod.Container, hook *runtimepb.ContainerAction) error {
 	switch action := hook.Action.(type) {
 	case *runtimepb.ContainerAction_Exec_:
 		if cmd := action.Exec.Command; len(cmd) > 0 {
-			err := r.execInContainer(ctr, nil, os.Stdout, os.Stderr, nil, cmd, false)
+			errCh := makeExecErrCh()
+			_, err := r.execInContainer(ctx, ctr, nil, os.Stdout, os.Stderr, cmd, false, nil, errCh)
 			if err != nil {
-				return fmt.Errorf("failed to execute exec hook, code %d: %s", err.Code, err.Description)
+				return err
+			}
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case err = <-errCh:
+				return err
 			}
 		}
 	case *runtimepb.ContainerAction_Http:
@@ -84,13 +82,13 @@ func (r *libpodRuntime) translatePodStatus(
 	pauseCtr *libpod.Container,
 	containers []*libpod.Container,
 ) (*runtimepb.PodStatusMsg, error) {
-	podUID := pauseCtr.Labels()[constant.ContainerLabelPodUID]
+	podUID := pauseCtr.Labels()[runtimeutil.ContainerLabelPodUID]
 	ctrStatus := make(map[string]*runtimepb.ContainerStatus)
 
 	for _, ctr := range containers {
 		labels := ctr.Labels()
-		ctrPodUID := labels[constant.ContainerLabelPodUID]
-		name := labels[constant.ContainerLabelPodContainer]
+		ctrPodUID := labels[runtimeutil.ContainerLabelPodUID]
+		name := labels[runtimeutil.ContainerLabelPodContainer]
 		if name == "" || ctrPodUID != podUID {
 			// invalid container, skip
 			continue

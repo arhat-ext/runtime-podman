@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package libpod
+package runtime
 
 import (
 	"context"
@@ -27,9 +27,13 @@ import (
 	"time"
 
 	"arhat.dev/aranya-proto/aranyagopb"
+	"arhat.dev/aranya-proto/aranyagopb/runtimepb"
 	"arhat.dev/libext/extruntime"
+	"arhat.dev/libext/types"
 	"arhat.dev/pkg/log"
 	"arhat.dev/pkg/wellknownerrors"
+	"ext.arhat.dev/runtimeutil"
+	"ext.arhat.dev/runtimeutil/storage"
 	libpodconfig "github.com/containers/common/pkg/config"
 	"github.com/containers/podman/v2/libpod"
 	"github.com/containers/podman/v2/libpod/define"
@@ -38,23 +42,28 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 
 	"ext.arhat.dev/runtime-podman/pkg/conf"
+	"ext.arhat.dev/runtime-podman/pkg/constant"
 	"ext.arhat.dev/runtime-podman/pkg/version"
-	"ext.arhat.dev/runtimeutil"
-	"ext.arhat.dev/runtimeutil/storage"
 )
 
-func NewLibpodRuntime(
+func NewPodmanRuntime(
 	ctx context.Context,
+	logger log.Interface,
 	storage *storage.Client,
 	config *conf.RuntimeConfig,
 ) (extruntime.RuntimeEngine, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	pauseCmd := constant.DefaultPauseCommand
+	if len(config.PauseCommand) > 0 {
+		pauseCmd = config.PauseCommand[0]
+	}
+
 	opts := []libpod.RuntimeOption{
 		libpod.WithNamespace(config.ManagementNamespace),
 		libpod.WithDefaultInfraImage(config.PauseImage),
-		libpod.WithDefaultInfraCommand(config.PauseCommand),
+		libpod.WithDefaultInfraCommand(pauseCmd),
 		libpod.WithDefaultTransport("docker://"),
 	}
 
@@ -86,34 +95,49 @@ func NewLibpodRuntime(
 	}
 
 	rt := &libpodRuntime{
+		logger: logger,
+		ctx:    ctx,
+
 		BaseRuntime: runtimeutil.NewBaseRuntime(
-			ctx, config, "libpod",
-			libpodversion.Version.String(),
-			runtime.GOOS, version.Arch(), sysinfo.GetKernelVersion(),
+			ctx, config.DataDir, config.ImageActionTimeout, config.PodActionTimeout,
+			"podman", libpodversion.Version.String(),
+			runtime.GOOS, "", version.Arch(), "",
 		),
+
+		pauseImage:   config.PauseImage,
+		pauseCommand: config.PauseCommand,
 
 		runtimeClient: runtimeClient,
 		imageClient:   imageClient,
-		storage:       storage,
+		storageClient: storage,
+
+		networkClient: nil,
 	}
 
-	rt.NetworkClient = runtimeutil.NewNetworkClient(rt.handleAbbotExec)
+	rt.networkClient = runtimeutil.NewNetworkClient(rt.handleAbbotExec)
 
 	return rt, nil
 }
 
 type libpodRuntime struct {
+	logger log.Interface
+
+	ctx context.Context
 	*runtimeutil.BaseRuntime
+
+	pauseImage   string
+	pauseCommand []string
+	abbotSubCmd  string
 
 	runtimeClient *libpod.Runtime
 	imageClient   *libpodimage.Runtime
-	storage       *storage.Client
+	storageClient *storage.Client
 
 	networkClient *runtimeutil.NetworkClient
 }
 
-func (r *libpodRuntime) handleAbbotExec(subCmd []string, stdout, stderr io.Writer) error {
-	logger := r.Log().WithName("network")
+func (r *libpodRuntime) handleAbbotExec(ctx context.Context, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error {
+	logger := r.logger.WithName("network")
 	ctr, err := r.findAbbotContainer()
 	if err != nil {
 		return err
@@ -121,46 +145,49 @@ func (r *libpodRuntime) handleAbbotExec(subCmd []string, stdout, stderr io.Write
 
 	// try to start abbot container if stopped
 	logger.D("checking abbot status")
-	status, plainErr := ctr.State()
-	if plainErr != nil {
-		return fmt.Errorf("failed to get abbot contaienr status: %v", plainErr)
+	status, err := ctr.State()
+	if err != nil {
+		return fmt.Errorf("failed to get abbot contaienr status: %w", err)
 	}
 
 	if status != define.ContainerStateRunning {
-		ctx, cancel := r.ActionContext()
-		defer cancel()
-
 		logger.D("abbot not running, trying to start", log.String("status", status.String()))
-		err := ctr.Start(ctx, true)
+		err = ctr.Start(ctx, true)
 		if err != nil {
-			return fmt.Errorf("failed to start abbot container: %v", err)
+			return fmt.Errorf("failed to start abbot container: %w", err)
 		}
 
 		time.Sleep(5 * time.Second)
 		logger.D("check abbot status again")
-		status, plainErr = ctr.State()
-		if plainErr != nil {
-			return fmt.Errorf("failed to get abbot container status: %v", plainErr)
+		status, err = ctr.State()
+		if err != nil {
+			return fmt.Errorf("failed to get abbot container status: %w", err)
 		}
 		_ = status
 	}
 
-	cmd := append(ctr.Command(), subCmd...)
+	cmd := append(ctr.Command(), r.abbotSubCmd)
 	logger.D("executing in abbot container", log.Strings("cmd", cmd))
-	msgErr := r.execInContainer(ctr, nil, stdout, stderr, nil, cmd, false)
-	if msgErr != nil {
-		return fmt.Errorf("unable to execute network command: %s", msgErr.Description)
+	errCh := makeExecErrCh()
+	_, err = r.execInContainer(ctx, ctr, nil, stdout, stderr, cmd, false, nil, errCh)
+	if err != nil {
+		return err
 	}
 
-	return nil
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // InitRuntime will start all existing pods after runtime has been created
 // if abbot container exists, start it first
-// only fatal error will be returned
+// only fatal error will be returned.
 func (r *libpodRuntime) InitRuntime() error {
-	logger := r.Log().WithFields(log.String("action", "init"))
-	ctx, cancelInit := r.ActionContext()
+	logger := r.logger.WithFields(log.String("action", "init"))
+	ctx, cancelInit := r.ActionContext(r.ctx)
 	defer cancelInit()
 
 	logger.D("looking up abbot container")
@@ -170,7 +197,7 @@ func (r *libpodRuntime) InitRuntime() error {
 		_ = abbotCtr.Sync()
 		status, err := abbotCtr.State()
 		if err != nil {
-			return fmt.Errorf("failed to inspect abbot container state: %v", err)
+			return fmt.Errorf("failed to inspect abbot container state: %w", err)
 		}
 
 		switch status {
@@ -186,7 +213,7 @@ func (r *libpodRuntime) InitRuntime() error {
 		if err != nil {
 			logger.I("failed to start abbot container", log.Error(err))
 			// abbot found but failed to start
-			return fmt.Errorf("failed to start abbot container: %v", err)
+			return fmt.Errorf("failed to start abbot container: %w", err)
 		}
 	}
 
@@ -200,7 +227,7 @@ func (r *libpodRuntime) InitRuntime() error {
 		// only select valid pods
 		if _, ok := pod.Labels()[runtimeutil.ContainerLabelPodUID]; !ok {
 			logger.D("deleting invalid pod", log.String("name", pod.Name()))
-			if err = r.deletePod(pod); err != nil {
+			if err = r.deletePod(context.TODO(), pod); err != nil {
 				logger.I("failed to delete invalid pod", log.Error(err))
 			}
 		} else {
@@ -229,7 +256,7 @@ func (r *libpodRuntime) InitRuntime() error {
 
 				_ = ctr.Sync()
 				pid, _ := ctr.PID()
-				err := r.RestoreContainerNetwork(int64(pid), ctr.ID())
+				err := r.networkClient.Restore(ctx, int64(pid), ctr.ID())
 				if err != nil {
 					logger.I("failed to restore container network", log.Error(err))
 				}
@@ -241,25 +268,25 @@ func (r *libpodRuntime) InitRuntime() error {
 	return nil
 }
 
-// EnsureImages ensure container images
-func (r *libpodRuntime) EnsureImages(options *aranyagopb.ImageEnsureCmd) ([]*aranyagopb.ImageStatusMsg, error) {
-	logger := r.Log().WithFields(log.String("action", "ensureImages"), log.Any("options", options))
+// EnsureImages ensure container images.
+func (r *libpodRuntime) EnsureImages(ctx context.Context, options *runtimepb.ImageEnsureCmd) (*runtimepb.ImageStatusListMsg, error) {
+	logger := r.logger.WithFields(log.String("action", "ensureImages"), log.Any("options", options))
 	logger.D("ensuring pod container image(s)")
 
-	allImages := map[string]*aranyagopb.ImagePullSpec{
-		r.PauseImage: {PullPolicy: aranyagopb.IMAGE_PULL_IF_NOT_PRESENT},
+	allImages := map[string]*runtimepb.ImagePullSpec{
+		r.pauseImage: {PullPolicy: runtimepb.IMAGE_PULL_IF_NOT_PRESENT},
 	}
 
 	for imageName, opt := range options.Images {
 		allImages[imageName] = opt
 	}
-	pulledImages, err := r.ensureImages(allImages)
+	pulledImages, err := r.ensureImages(ctx, allImages)
 	if err != nil {
 		logger.I("failed to ensure container images", log.Error(err))
 		return nil, err
 	}
 
-	var images []*aranyagopb.ImageStatusMsg
+	images := make([]*runtimepb.ImageStatusMsg, len(pulledImages))
 	for _, img := range pulledImages {
 		var sha256Hash string
 		digests, err := img.RepoDigests()
@@ -277,326 +304,25 @@ func (r *libpodRuntime) EnsureImages(options *aranyagopb.ImageEnsureCmd) ([]*ara
 			continue
 		}
 
-		images = append(images, &aranyagopb.ImageStatusMsg{
+		images = append(images, &runtimepb.ImageStatusMsg{
 			Sha256: sha256Hash,
 			Refs:   []string{img.Tag},
 		})
 	}
 
-	return images, nil
+	return &runtimepb.ImageStatusListMsg{Images: images}, nil
 }
 
-// CreateContainers creates containers
-// nolint:gocyclo
-func (r *libpodRuntime) EnsurePod(options *aranyagopb.PodEnsureCmd) (_ *aranyagopb.PodStatusMsg, err error) {
-	logger := r.Log().WithFields(log.String("action", "createContainers"), log.String("uid", options.PodUid))
-	ctx, cancelCreate := r.RuntimeActionContext()
-	defer func() {
-		cancelCreate()
-
-		if err != nil {
-			logger.D("cleaning up pod data")
-			err2 := runtimeutil.CleanupPodData(
-				r.PodDir(options.PodUid),
-				r.PodRemoteVolumeDir(options.PodUid, ""),
-				r.PodTmpfsVolumeDir(options.PodUid, ""),
-				r.storage,
-			)
-			if err2 != nil {
-				logger.E("failed to cleanup pod data", log.Error(err2))
-			}
-		}
-	}()
-
-	var (
-		pod            *libpod.Pod
-		pauseCtr       *libpod.Container
-		abbotRespBytes []byte
-	)
-
-	logger.V("looking up previously created pod")
-	pod, err = r.findPod(options.PodUid)
-	if err != nil {
-		if !errors.Is(err, wellknownerrors.ErrNotFound) {
-			return nil, fmt.Errorf("failed to look up pod: %w", err)
-		}
-
-		err = nil
-		// need to create pause container
-		logger.V("creating pod and pause container")
-		pod, pauseCtr, abbotRespBytes, err = r.createPauseContainer(ctx, options)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create pod for containers: %w", err)
-		}
-	} else {
-		// pod is there, pause container should present
-		logger.V("found pod, check pause container")
-		pauseCtr, err = r.findContainer(options.PodUid, runtimeutil.ContainerNamePause)
-		if err != nil {
-			logger.I("deleting invalid pod without pause container")
-			if err2 := r.deletePod(pod); err2 != nil {
-				logger.I("failed to delete invalid pod", log.Error(err2))
-			}
-
-			return nil, err
-		}
-	}
-
-	defer func() {
-		if err != nil {
-			logger.D("deleting pause container due to error", log.Error(err))
-			err2 := r.deletePod(pod)
-			if err2 != nil {
-				logger.I("failed to delete pause container", log.Error(err2))
-			}
-		}
-	}()
-
-	logger.V("starting pause container")
-	_ = pauseCtr.Sync()
-	state, err := pauseCtr.State()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get pause container state: %w", err)
-	}
-
-	switch state {
-	case define.ContainerStateConfigured,
-		define.ContainerStateCreated,
-		define.ContainerStateStopped,
-		define.ContainerStateExited:
-		// can be started
-		err = pauseCtr.Start(ctx, false)
-		if err != nil {
-			return nil, fmt.Errorf("failed to start pause container: %w", err)
-		}
-	case define.ContainerStatePaused:
-		err = pauseCtr.Unpause()
-		if err != nil {
-			return nil, fmt.Errorf("failed to unpause pause container: %w", err)
-		}
-	case define.ContainerStateUnknown:
-		return nil, fmt.Errorf("pause container state unknow")
-	case define.ContainerStateRemoving:
-		return nil, fmt.Errorf("pause container is to be removed")
-	case define.ContainerStateRunning:
-	// already running (do nothing)
-	default:
-		return nil, fmt.Errorf("invalid container state %v", state)
-	}
-
-	var (
-		ctrList           []*libpod.Container
-		ctrPostStartHooks []*aranyagopb.ContainerAction
-	)
-
-	for _, spec := range options.Containers {
-		logger.V("creating container", log.String("name", spec.Name))
-
-		var ctr *libpod.Container
-		ctr, err = r.createContainer(ctx, options, pod, spec, runtimeutil.SharedNamespaces(pauseCtr.ID(), options))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create container: %w", err)
-		}
-
-		ctrList = append(ctrList, ctr)
-		ctrPostStartHooks = append(ctrPostStartHooks, spec.HookPostStart)
-	}
-
-	// start containers one by one
-	for i, ctr := range ctrList {
-		err = ctr.Start(ctx, false)
-		if err != nil {
-			return nil, fmt.Errorf("failed to start container: %w", err)
-		}
-
-		//noinspection GoNilness
-		if h := ctrPostStartHooks[i]; h != nil {
-			err = r.doHookAction(logger, ctr, h)
-			if err != nil {
-				return nil, fmt.Errorf("failed to execute post start hooks: %w", err)
-			}
-		}
-
-		if !options.Wait {
-			continue
-		}
-
-		var exitCode int32
-		exitCode, err = ctr.WaitWithInterval(500 * time.Millisecond)
-		if err != nil {
-			return nil, fmt.Errorf("container exited with error code %d: %w", exitCode, err)
-		}
-	}
-
-	time.Sleep(5 * time.Second)
-	for _, ctr := range ctrList {
-		if options.Wait {
-			// container MUST have exited, no more check
-			continue
-		}
-
-		logger.V("checking whether container exited")
-		code, exited, err := ctr.ExitCode()
-		if err != nil {
-			return nil, fmt.Errorf("failed to check whether container %q exited: %w", ctr.Name(), err)
-		}
-
-		if exited {
-			return nil, fmt.Errorf("container %q exited with code %d: %w", ctr.Name(), code, err)
-		}
-	}
-
-	return r.translatePodStatus(abbotRespBytes, pauseCtr, ctrList)
-}
-
-func (r *libpodRuntime) DeletePod(options *aranyagopb.PodDeleteCmd) (*aranyagopb.PodStatusMsg, error) {
-	logger := r.Log().WithFields(log.String("action", "deletePod"), log.Any("options", options))
-
-	defer func() {
-		logger.D("cleaning up pod data")
-		err := runtimeutil.CleanupPodData(
-			r.PodDir(options.PodUid),
-			r.PodRemoteVolumeDir(options.PodUid, ""),
-			r.PodTmpfsVolumeDir(options.PodUid, ""),
-			r.storage,
-		)
-		if err != nil {
-			logger.E("failed to cleanup pod data", log.Error(err))
-		}
-	}()
-
-	logger.D("looking up pod to be deleted")
-
-	pod, err := r.findPod(options.PodUid)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find pod: %w", err)
-	}
-
-	if len(options.Containers) == 0 {
-		logger.D("deleting target pod")
-		if err := r.deletePod(pod); err != nil {
-			logger.I("failed to delete target pod", log.Error(err))
-			return nil, err
-		}
-
-		return aranyagopb.NewPodStatusMsg(options.PodUid, nil, nil), nil
-	} else {
-		var pauseCtr *libpod.Container
-		ctrs, _ := pod.AllContainers()
-		for _, c := range ctrs {
-			if runtimeutil.IsPauseContainer(c.Labels()) {
-				pauseCtr = c
-				break
-			}
-		}
-
-		if pauseCtr == nil {
-			return nil, fmt.Errorf("no pause container in pod")
-		}
-
-		for _, ctrName := range options.Containers {
-			logger.V("looking up container", log.String("name", ctrName))
-			ctr, err := r.findContainer(options.PodUid, ctrName)
-			if err != nil && !errors.Is(err, wellknownerrors.ErrNotFound) {
-				return nil, fmt.Errorf("failed to do container find: %w", err)
-			}
-
-			logger.V("deleting container", log.String("name", ctrName))
-			err = r.deleteContainer(ctr)
-			if err != nil {
-				return nil, fmt.Errorf("failed to delete container %q: %w", ctrName, err)
-			}
-		}
-
-		return r.translatePodStatus(nil, pauseCtr, ctrs)
-	}
-}
-
-func (r *libpodRuntime) ListPods(options *aranyagopb.PodListCmd) ([]*aranyagopb.PodStatusMsg, error) {
-	logger := r.Log().WithFields(log.String("action", "list"), log.Any("options", options))
-	filters := make(map[string]string)
-	if !options.All {
-		if len(options.Names) > 0 {
-			// TODO: support multiple names lookup
-			filters[runtimeutil.ContainerLabelPodName] = options.Names[0]
-		}
-	}
-
-	logger.D("listing pods")
-	pods, err := r.runtimeClient.Pods(podLabelFilterFunc(filters))
-	if err != nil {
-		logger.I("failed to filter out desired pods")
-		return nil, err
-	}
-
-	actionCtx, cancel := r.RuntimeActionContext()
-	defer cancel()
-
-	var results []*aranyagopb.PodStatusMsg
-	for _, pod := range pods {
-		podUID, ok := pod.Labels()[runtimeutil.ContainerLabelPodUID]
-		if !ok {
-			logger.D("deleting invalid pod", log.String("name", pod.Name()))
-			if err := r.deletePod(pod); err != nil {
-				logger.I("failed to delete invalid pod", log.Error(err))
-			}
-			continue
-		}
-
-		logger.D("looking up pause container", log.String("podUID", podUID))
-		pauseCtr, err := r.findContainer(podUID, runtimeutil.ContainerNamePause)
-		if err != nil {
-			// in libpod, pod is separated from the containers, it's highly possible we didn't
-			// create any container in this pod, so just delete it silently
-			err2 := r.runtimeClient.RemovePod(actionCtx, pod, true, true)
-			if err2 != nil {
-				logger.I("failed to remove invalid pod", log.Error(err2))
-				return nil, err2
-			}
-			continue
-		}
-
-		var (
-			abbotRespBytes []byte
-		)
-		// force sync
-		_ = pauseCtr.Sync()
-		if runtimeutil.IsHostNetwork(pauseCtr.Labels()) {
-			logger.D("looking up pod ip for non-host network pod")
-			pid, _ := pauseCtr.PID()
-			abbotRespBytes, err = r.QueryContainerNetwork(int64(pid), pauseCtr.ID())
-			if err != nil {
-				logger.I("failed to get pod ip address", log.Error(err))
-			}
-		}
-
-		logger.D("looking up all pod containers", log.String("podUID", podUID))
-		ctrList, err := pod.AllContainers()
-		if err != nil {
-			return nil, fmt.Errorf("failed to find all containers in pod: %w", err)
-		}
-
-		logger.D("translating pod status", log.String("podUID", podUID))
-		status, err := r.translatePodStatus(abbotRespBytes, pauseCtr, ctrList)
-		if err != nil {
-			return nil, fmt.Errorf("failed to translate pod status: %w", err)
-		}
-
-		results = append(results, status)
-	}
-
-	return results, nil
-}
-
-func (r *libpodRuntime) ExecInContainer(
+func (r *libpodRuntime) Exec(
+	ctx context.Context,
 	podUID, container string,
 	stdin io.Reader,
 	stdout, stderr io.Writer,
-	resizeCh <-chan *aranyagopb.TerminalResizeCmd,
 	command []string,
 	tty bool,
-) *aranyagopb.ErrorMsg {
-	logger := r.Log().WithFields(
+	errCh chan<- *aranyagopb.ErrorMsg,
+) (types.ResizeHandleFunc, error) {
+	logger := r.logger.WithFields(
 		log.String("uid", podUID),
 		log.String("container", container),
 		log.String("action", "exec"),
@@ -605,19 +331,20 @@ func (r *libpodRuntime) ExecInContainer(
 
 	ctr, err := r.findContainer(podUID, container)
 	if err != nil {
-		return errconv.ToConnectivityError(err)
+		return nil, err
 	}
 
-	return r.execInContainer(ctr, stdin, stdout, stderr, resizeCh, command, tty)
+	return r.execInContainer(ctx, ctr, stdin, stdout, stderr, command, tty, nil, errCh)
 }
 
-func (r *libpodRuntime) AttachContainer(
+func (r *libpodRuntime) Attach(
+	ctx context.Context,
 	podUID, container string,
 	stdin io.Reader,
 	stdout, stderr io.Writer,
-	resizeCh <-chan *aranyagopb.TerminalResizeCmd,
-) error {
-	logger := r.Log().WithFields(
+	errCh chan<- *aranyagopb.ErrorMsg,
+) (types.ResizeHandleFunc, error) {
+	logger := r.logger.WithFields(
 		log.String("action", "attach"),
 		log.String("uid", podUID),
 		log.String("container", container),
@@ -627,57 +354,53 @@ func (r *libpodRuntime) AttachContainer(
 	ctr, err := r.findContainer(podUID, container)
 	if err != nil {
 		logger.I("failed to find container", log.Error(err))
-		return fmt.Errorf("failed to find target container: %w", wellknownerrors.ErrNotFound)
-	}
-
-	attachCtx, cancelAttach := r.ActionContext()
-	defer cancelAttach()
-
-	var ch chan remotecommand.TerminalSize
-	if resizeCh != nil {
-		ch = make(chan remotecommand.TerminalSize, 1)
-		go func() {
-			for {
-				select {
-				case size, more := <-resizeCh:
-					if !more {
-						return
-					}
-					select {
-					case <-attachCtx.Done():
-					case ch <- remotecommand.TerminalSize{Width: uint16(size.Cols), Height: uint16(size.Rows)}:
-					}
-				case <-attachCtx.Done():
-				}
-			}
-
-		}()
+		return nil, err
 	}
 
 	streams := r.translateStreams(stdin, stdout, stderr)
 
-	err = ctr.Attach(streams, "", ch)
+	ch := make(chan remotecommand.TerminalSize)
+
+	go func() {
+		defer func() {
+			close(errCh)
+		}()
+
+		err = ctr.Attach(streams, "", ch)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+			case errCh <- &aranyagopb.ErrorMsg{
+				Kind:        aranyagopb.ERR_COMMON,
+				Description: err.Error(),
+				Code:        0,
+			}:
+			}
+		}
+	}()
+
+	return func(cols, rows uint32) {
+		select {
+		case <-ctx.Done():
+		case ch <- remotecommand.TerminalSize{
+			Width:  uint16(cols),
+			Height: uint16(rows),
+		}:
+		}
+	}, nil
+}
+
+func (r *libpodRuntime) Logs(
+	ctx context.Context,
+	options *aranyagopb.LogsCmd,
+	stdout, stderr io.Writer,
+) error {
+	ctr, err := r.findContainer(options.PodUid, options.Container)
 	if err != nil {
 		return err
 	}
 
-	return nil
-}
-
-func (r *libpodRuntime) GetContainerLogs(
-	podUID string,
-	options *aranyagopb.LogsCmd,
-	stdout, stderr io.WriteCloser,
-	logCtx context.Context,
-) error {
-	defer func() { _, _ = stdout.Close(), stderr.Close() }()
-
-	ctr, err := r.findContainer(podUID, options.Container)
-	if err != nil {
-		return fmt.Errorf("failed to find target container")
-	}
-
-	err = runtimeutil.ReadLogs(logCtx, ctr.LogPath(), options, stdout, stderr)
+	err = runtimeutil.ReadLogs(ctx, ctr.LogPath(), options, stdout, stderr)
 	if err != nil {
 		return err
 	}
@@ -686,11 +409,13 @@ func (r *libpodRuntime) GetContainerLogs(
 }
 
 func (r *libpodRuntime) PortForward(
+	ctx context.Context,
 	podUID, protocol string,
 	port int32,
-	downstream io.ReadWriter,
+	upstream io.Reader,
+	downstream io.Writer,
 ) error {
-	logger := r.Log().WithFields(
+	logger := r.logger.WithFields(
 		log.String("action", "portforward"),
 		log.String("proto", protocol),
 		log.Int32("port", port),
@@ -716,8 +441,5 @@ func (r *libpodRuntime) PortForward(
 		}
 	}
 
-	ctx, cancel := r.ActionContext()
-	defer cancel()
-
-	return runtimeutil.PortForward(ctx, address, protocol, port, downstream)
+	return runtimeutil.PortForward(ctx, address, protocol, port, upstream, downstream)
 }

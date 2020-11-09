@@ -23,21 +23,21 @@ import (
 	"arhat.dev/arhat-proto/arhatgopb"
 	"arhat.dev/libext"
 	"arhat.dev/libext/codec"
+
+	// Add protobuf codec support.
+	_ "arhat.dev/libext/codec/codecpb"
 	"arhat.dev/libext/extruntime"
 	"arhat.dev/pkg/log"
 	"ext.arhat.dev/runtimeutil/storage"
+
+	// Add sotrage drivers.
+	_ "ext.arhat.dev/runtimeutil/storage/general"
+	_ "ext.arhat.dev/runtimeutil/storage/sshfs"
 	"github.com/spf13/cobra"
 
 	"ext.arhat.dev/runtime-podman/pkg/conf"
 	"ext.arhat.dev/runtime-podman/pkg/constant"
 	"ext.arhat.dev/runtime-podman/pkg/runtime"
-
-	// Add sotrage drivers
-	_ "ext.arhat.dev/runtimeutil/storage/general"
-	_ "ext.arhat.dev/runtimeutil/storage/sshfs"
-
-	// Add protobuf codec support
-	_ "arhat.dev/libext/codec/codecpb"
 )
 
 func NewRuntimePodmanCmd() *cobra.Command {

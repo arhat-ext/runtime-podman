@@ -14,11 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package libpod
+package runtime
 
 import (
+	"arhat.dev/aranya-proto/aranyagopb"
 	"github.com/containers/podman/v2/libpod"
 )
+
+func makeExecErrCh() chan *aranyagopb.ErrorMsg {
+	return make(chan *aranyagopb.ErrorMsg, 2)
+}
 
 func filterLabels(filters, labels map[string]string) bool {
 	if len(labels) >= len(filters) {

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package libpod
+package runtime
 
 import (
 	"context"
@@ -30,20 +30,21 @@ import (
 	"time"
 
 	"arhat.dev/aranya-proto/aranyagopb"
+	"arhat.dev/aranya-proto/aranyagopb/runtimepb"
+	"arhat.dev/libext/types"
 	"arhat.dev/pkg/log"
 	"arhat.dev/pkg/wellknownerrors"
+	"ext.arhat.dev/runtimeutil"
+	"ext.arhat.dev/runtimeutil/storage"
 	"github.com/containers/image/v5/manifest"
 	"github.com/containers/podman/v2/libpod"
 	"github.com/containers/podman/v2/libpod/define"
 	libpodns "github.com/containers/podman/v2/pkg/namespaces"
 	libpodspec "github.com/containers/podman/v2/pkg/spec"
-	"github.com/containers/storage"
+	ctrstorage "github.com/containers/storage"
 	ociruntimespec "github.com/opencontainers/runtime-spec/specs-go"
 	"go.uber.org/multierr"
 	"k8s.io/client-go/tools/remotecommand"
-
-	"ext.arhat.dev/runtime-podman/pkg/constant"
-	"ext.arhat.dev/runtimeutil"
 )
 
 func (r *libpodRuntime) listContainersByLabels(labels map[string]string) ([]*libpod.Container, error) {
@@ -58,7 +59,7 @@ func (r *libpodRuntime) listContainersByLabels(labels map[string]string) ([]*lib
 func (r *libpodRuntime) listPauseContainers() ([]*libpod.Container, error) {
 	return r.listContainersByLabels(
 		map[string]string{
-			constant.ContainerLabelPodContainerRole: constant.ContainerRoleInfra,
+			runtimeutil.ContainerLabelPodContainerRole: runtimeutil.ContainerRoleInfra,
 		},
 	)
 }
@@ -82,14 +83,14 @@ func (r *libpodRuntime) findAbbotContainer() (*libpod.Container, error) {
 
 func (r *libpodRuntime) findContainer(podUID, container string) (*libpod.Container, error) {
 	return r.findContainerByLabels(map[string]string{
-		constant.ContainerLabelPodUID:       podUID,
-		constant.ContainerLabelPodContainer: container,
+		runtimeutil.ContainerLabelPodUID:       podUID,
+		runtimeutil.ContainerLabelPodContainer: container,
 	})
 }
 
 func (r *libpodRuntime) findPod(podUID string) (*libpod.Pod, error) {
 	pods, err := r.runtimeClient.Pods(podLabelFilterFunc(map[string]string{
-		constant.ContainerLabelPodUID: podUID,
+		runtimeutil.ContainerLabelPodUID: podUID,
 	}))
 	if err != nil {
 		return nil, err
@@ -110,7 +111,7 @@ func (r *libpodRuntime) startPod(
 	logger log.Interface,
 	ctx context.Context,
 	pod *libpod.Pod,
-	containers map[*libpod.Container]*aranyagopb.ContainerAction,
+	containers map[*libpod.Container]*runtimepb.ContainerAction,
 ) error {
 	errMap, err := pod.Start(ctx)
 	if err != nil {
@@ -129,7 +130,7 @@ func (r *libpodRuntime) startPod(
 	for ctr, postStartHook := range containers {
 		if postStartHook != nil {
 			logger.D("executing post-start hook")
-			if err := r.doHookAction(logger, ctr, postStartHook); err != nil {
+			if err := r.doHookAction(ctx, ctr, postStartHook); err != nil {
 				logger.I("failed to execute post-start hook", log.Error(err))
 			}
 		}
@@ -139,68 +140,65 @@ func (r *libpodRuntime) startPod(
 }
 
 func (r *libpodRuntime) execInContainer(
+	ctx context.Context,
 	ctr *libpod.Container,
 	stdin io.Reader,
 	stdout, stderr io.Writer,
-	resizeCh <-chan *aranyagopb.TerminalResizeCmd,
 	command []string,
 	tty bool,
-) *aranyagopb.ErrorMsg {
-	execCtx, cancelExec := r.ActionContext()
-	defer cancelExec()
-
+	env map[string]string,
+	errCh chan<- *aranyagopb.ErrorMsg,
+) (types.ResizeHandleFunc, error) {
 	streams := r.translateStreams(stdin, stdout, stderr)
 
 	resize := make(chan remotecommand.TerminalSize)
-	if tty && resizeCh != nil {
-		go func() {
-			for {
-				select {
-				case size, more := <-resizeCh:
-					if !more {
-						close(resize)
-						return
-					}
-
-					select {
-					case <-execCtx.Done():
-						return
-					case resize <- remotecommand.TerminalSize{Width: uint16(size.Cols), Height: uint16(size.Rows)}:
-					}
-				case <-execCtx.Done():
-					return
-				}
-			}
-		}()
-	}
-
 	execConfig := &libpod.ExecConfig{
 		Command:      command,
 		Terminal:     tty,
 		AttachStdin:  streams.AttachInput,
 		AttachStdout: streams.AttachOutput,
 		AttachStderr: streams.AttachError,
-	}
-	exitCode, err := ctr.Exec(execConfig, streams, resize)
-	if err != nil {
-		return aranyagopb.NewCommonErrorMsgWithCode(int64(exitCode), err.Error())
+		Environment:  env,
 	}
 
-	return nil
+	go func() {
+		defer func() {
+			close(errCh)
+		}()
+
+		exitCode, err := ctr.Exec(execConfig, streams, resize)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+			case errCh <- &aranyagopb.ErrorMsg{
+				Kind:        aranyagopb.ERR_COMMON,
+				Description: err.Error(),
+				Code:        int64(exitCode),
+			}:
+			}
+		}
+	}()
+
+	return func(cols, rows uint32) {
+		select {
+		case <-ctx.Done():
+		case resize <- remotecommand.TerminalSize{Width: uint16(cols), Height: uint16(rows)}:
+		}
+	}, nil
 }
 
 func (r *libpodRuntime) createPauseContainer(
 	ctx context.Context,
-	options *aranyagopb.PodEnsureCmd,
+	options *runtimepb.PodEnsureCmd,
 ) (_ *libpod.Pod, _ *libpod.Container, abbotRespBytes []byte, err error) {
-	logger := r.Log().WithFields(log.String("action", "createPauseContainer"))
+	logger := r.logger.WithFields(log.String("action", "createPauseContainer"))
 	podName := fmt.Sprintf("%s.%s", options.Namespace, options.Name)
 
 	logger.V("looking up previously create pod", log.String("name", podName))
 	prevPod, _ := r.runtimeClient.LookupPod(podName)
 	if prevPod != nil {
 		logger.V("found previously created pod, deleting", log.String("name", podName))
-		if err = r.deletePod(prevPod); err != nil {
+		if err = r.deletePod(ctx, prevPod); err != nil {
 			logger.I("failed to delete previously created pod", log.Error(err))
 			return nil, nil, nil, err
 		}
@@ -215,7 +213,7 @@ func (r *libpodRuntime) createPauseContainer(
 	}
 
 	var hosts []string
-	image, err := r.imageClient.NewFromLocal(r.PauseImage)
+	image, err := r.imageClient.NewFromLocal(r.pauseImage)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -225,9 +223,9 @@ func (r *libpodRuntime) createPauseContainer(
 		return nil, nil, nil, err
 	}
 
-	podLabels := runtimeutil.ContainerLabels(options, constant.ContainerNamePause)
-	delete(podLabels, constant.ContainerLabelPodContainer)
-	delete(podLabels, constant.ContainerLabelPodContainerRole)
+	podLabels := runtimeutil.ContainerLabels(options, runtimeutil.ContainerNamePause)
+	delete(podLabels, runtimeutil.ContainerLabelPodContainer)
+	delete(podLabels, runtimeutil.ContainerLabelPodContainerRole)
 
 	podOpts := []libpod.PodCreateOption{
 		libpod.WithPodName(podName),
@@ -243,7 +241,7 @@ func (r *libpodRuntime) createPauseContainer(
 	defer func() {
 		if err != nil {
 			logger.D("deleting pod due to error", log.NamedError("reason", err))
-			if err2 := r.deletePod(pod); err2 != nil {
+			if err2 := r.deletePod(context.TODO(), pod); err2 != nil {
 				logger.I("failed to delete pod when error happened", log.Error(err2))
 			}
 		}
@@ -253,21 +251,20 @@ func (r *libpodRuntime) createPauseContainer(
 	if imageConfig.WorkingDir != "" {
 		workDir = imageConfig.WorkingDir
 	}
-	entryCmd := []string{r.PauseCommand}
 
 	config := &libpodspec.CreateConfig{
 		Pod:           pod.ID(),
 		Env:           runtimeutil.GetEnv(imageConfig.Env),
-		Name:          runtimeutil.GetContainerName(options.Namespace, options.Name, constant.ContainerNamePause),
-		Labels:        runtimeutil.ContainerLabels(options, constant.ContainerNamePause),
-		Entrypoint:    entryCmd,
-		Command:       entryCmd,
+		Name:          runtimeutil.GetContainerName(options.Namespace, options.Name, runtimeutil.ContainerNamePause),
+		Labels:        runtimeutil.ContainerLabels(options, runtimeutil.ContainerNamePause),
+		Entrypoint:    r.pauseCommand,
+		Command:       nil,
 		LogDriver:     define.KubernetesLogging,
 		WorkDir:       workDir,
-		Image:         r.PauseImage,
+		Image:         r.pauseImage,
 		ImageID:       image.ID(),
 		StopSignal:    syscall.SIGTERM,
-		RestartPolicy: r.translateRestartPolicy(aranyagopb.RESTART_ALWAYS),
+		RestartPolicy: r.translateRestartPolicy(runtimepb.RESTART_ALWAYS),
 
 		Security: libpodspec.SecurityConfig{
 			// TODO: apply seccomp profile when kubernetes make it GA
@@ -279,7 +276,7 @@ func (r *libpodRuntime) createPauseContainer(
 			Hostname: options.Name,
 		},
 		User: libpodspec.UserConfig{
-			IDMappings: &storage.IDMappingOptions{},
+			IDMappings: &ctrstorage.IDMappingOptions{},
 			// TODO: set user namespace properly,
 			// 		 host userns is a work around in libpod 1.5.0+
 			// nolint:goconst
@@ -327,7 +324,7 @@ func (r *libpodRuntime) createPauseContainer(
 	defer func() {
 		if err != nil {
 			logger.D("deleting pause container due to error", log.NamedError("reason", err))
-			if err2 := r.deletePod(pod); err2 != nil {
+			if err2 := r.deletePod(context.TODO(), pod); err2 != nil {
 				logger.I("failed to delete pause container when error happened", log.Error(err2))
 			}
 		}
@@ -354,8 +351,11 @@ func (r *libpodRuntime) createPauseContainer(
 
 	if !options.HostNetwork {
 		pid, _ := pauseCtr.PID()
-		abbotRespBytes, err = r.DelegateExec(
-			options.Network.AbbotRequestBytes, int64(pid), pauseCtr.ID(),
+		abbotRespBytes, err = r.networkClient.Do(
+			ctx,
+			options.Network.AbbotRequestBytes,
+			int64(pid),
+			pauseCtr.ID(),
 		)
 		if err != nil {
 			return nil, nil, nil, err
@@ -368,9 +368,9 @@ func (r *libpodRuntime) createPauseContainer(
 // nolint:gocyclo
 func (r *libpodRuntime) createContainer(
 	ctx context.Context,
-	options *aranyagopb.PodEnsureCmd,
+	options *runtimepb.PodEnsureCmd,
 	pod *libpod.Pod,
-	spec *aranyagopb.ContainerSpec,
+	spec *runtimepb.ContainerSpec,
 	ns map[string]string,
 ) (*libpod.Container, error) {
 	var (
@@ -402,7 +402,7 @@ func (r *libpodRuntime) createContainer(
 	}
 
 	if volumeData == nil {
-		volumeData = make(map[string]*aranyagopb.NamedData)
+		volumeData = make(map[string]*runtimepb.NamedData)
 	}
 
 	for volName, volMountSpec := range spec.Mounts {
@@ -414,7 +414,8 @@ func (r *libpodRuntime) createContainer(
 			var err error
 			source, err = runtimeutil.ResolveHostPathMountSource(
 				hostPath, options.PodUid, volName,
-				volMountSpec.Remote, r.RuntimeConfig,
+				volMountSpec.Remote,
+				r.PodRemoteVolumeDir, r.PodTmpfsVolumeDir,
 			)
 			if err != nil {
 				return nil, err
@@ -422,7 +423,7 @@ func (r *libpodRuntime) createContainer(
 
 			if volMountSpec.Remote {
 				// for remote volume, hostPath is the aranya pod host path
-				err := r.storage.Mount(hostPath, source, r.handleStorageFailure(options.PodUid))
+				err := r.storageClient.Mount(context.TODO(), hostPath, source, r.handleStorageFailure(options.PodUid))
 				if err != nil {
 					return nil, err
 				}
@@ -445,7 +446,7 @@ func (r *libpodRuntime) createContainer(
 			}
 		}
 
-		var options = make([]string, len(volMountSpec.Options))
+		options := make([]string, len(volMountSpec.Options))
 		_ = copy(options, volMountSpec.Options)
 
 		if volMountSpec.ReadOnly {
@@ -465,7 +466,7 @@ func (r *libpodRuntime) createContainer(
 			return nil, err
 		}
 
-		data, err := r.CreateResolvConf(netOpts.Nameservers, netOpts.DnsSearches, netOpts.DnsOptions)
+		data, err := r.networkClient.CreateResolvConf(netOpts.Nameservers, netOpts.DnsSearches, netOpts.DnsOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -483,7 +484,7 @@ func (r *libpodRuntime) createContainer(
 
 	if probe := spec.LivenessCheck; probe != nil && probe.Method != nil {
 		switch action := spec.LivenessCheck.Method.Action.(type) {
-		case *aranyagopb.ContainerAction_Exec_:
+		case *runtimepb.ContainerAction_Exec_:
 			healthCheck = &manifest.Schema2HealthConfig{
 				Test:        append([]string{"CMD"}, action.Exec.Command...),
 				Interval:    time.Duration(probe.ProbeInterval),
@@ -492,9 +493,9 @@ func (r *libpodRuntime) createContainer(
 				Retries:     int(probe.FailureThreshold),
 				// TODO: implement success threshold
 			}
-		case *aranyagopb.ContainerAction_Socket_:
+		case *runtimepb.ContainerAction_Socket_:
 			// TODO: implement
-		case *aranyagopb.ContainerAction_Http:
+		case *runtimepb.ContainerAction_Http:
 			// TODO: implement
 		}
 	}
@@ -627,7 +628,7 @@ func (r *libpodRuntime) createContainer(
 			// TODO: set userns properly,
 			// 		 host userns is a work around in libpod 1.5.0+
 			GroupAdd: nil,
-			IDMappings: &storage.IDMappingOptions{
+			IDMappings: &ctrstorage.IDMappingOptions{
 				HostGIDMapping: true,
 				HostUIDMapping: true,
 			},
@@ -692,16 +693,16 @@ func (r *libpodRuntime) deleteContainer(ctr *libpod.Container) error {
 		}
 	}
 
-	_, ok := labels[constant.ContainerLabelPodUID]
+	_, ok := labels[runtimeutil.ContainerLabelPodUID]
 	if ok {
 		// not managed by us
 		return nil
 	}
 
-	if name, ok := labels[constant.ContainerLabelPodContainer]; !ok {
+	if name, ok := labels[runtimeutil.ContainerLabelPodContainer]; !ok {
 		// not managed by us
 		return nil
-	} else if name == constant.ContainerNamePause {
+	} else if name == runtimeutil.ContainerNamePause {
 		// is pause container, deny, delete pod instead
 		return fmt.Errorf(
 			"pause container should not be delete as normal container: %w",
@@ -713,12 +714,12 @@ func (r *libpodRuntime) deleteContainer(ctr *libpod.Container) error {
 	return r.runtimeClient.RemoveContainer(context.TODO(), ctr, true, true)
 }
 
-func (r *libpodRuntime) deletePod(pod *libpod.Pod) error {
+func (r *libpodRuntime) deletePod(ctx context.Context, pod *libpod.Pod) error {
 	// delete pod network (best effort)
-	podUID, ok := pod.Labels()[constant.ContainerLabelPodUID]
+	podUID, ok := pod.Labels()[runtimeutil.ContainerLabelPodUID]
 	if ok {
 		// valid pod, try to delete network
-		pauseCtr, err := r.findContainer(podUID, constant.ContainerNamePause)
+		pauseCtr, err := r.findContainer(podUID, runtimeutil.ContainerNamePause)
 		if err != nil {
 			return err
 		}
@@ -728,7 +729,7 @@ func (r *libpodRuntime) deletePod(pod *libpod.Pod) error {
 		labels := pauseCtr.Labels()
 		if !runtimeutil.IsHostNetwork(labels) {
 			pid, _ := pauseCtr.PID()
-			if err = r.DeleteContainerNetwork(int64(pid), pauseCtr.ID()); err != nil {
+			if err = r.networkClient.Delete(ctx, int64(pid), pauseCtr.ID()); err != nil {
 				// refuse to delete pod if network not deleted
 				return err
 			}
@@ -752,20 +753,20 @@ func (r *libpodRuntime) deletePod(pod *libpod.Pod) error {
 	return r.runtimeClient.RemovePod(context.Background(), pod, true, true)
 }
 
-func (r *libpodRuntime) handleStorageFailure(podUID string) storage.FailureHandleFunc {
-	logger := r.Log().WithFields(log.String("module", "storage"), log.String("podUID", podUID))
+func (r *libpodRuntime) handleStorageFailure(podUID string) storage.ExitHandleFunc {
+	logger := r.logger.WithFields(log.String("module", "storage"), log.String("podUID", podUID))
 	return func(remotePath, mountPoint string, err error) {
 		if err != nil {
 			logger.I("storage mounter exited", log.Error(err))
 		}
 
-		_, e := r.findContainer(podUID, constant.ContainerNamePause)
+		_, e := r.findContainer(podUID, runtimeutil.ContainerNamePause)
 		if errors.Is(e, wellknownerrors.ErrNotFound) {
 			logger.D("pod not found, no more remount action")
 			return
 		}
 
-		err = r.storage.Mount(remotePath, mountPoint, r.handleStorageFailure(podUID))
+		err = r.storageClient.Mount(context.TODO(), remotePath, mountPoint, r.handleStorageFailure(podUID))
 		if err != nil {
 			logger.I("failed to mount remote volume", log.Error(err))
 		}

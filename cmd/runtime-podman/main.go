@@ -29,7 +29,7 @@ import (
 func main() {
 	rand.Seed(time.Now().UnixNano())
 
-	rootCmd := cmd.NewTemplateGoCmd()
+	rootCmd := cmd.NewRuntimePodmanCmd()
 	rootCmd.AddCommand(version.NewVersionCmd())
 
 	err := rootCmd.Execute()

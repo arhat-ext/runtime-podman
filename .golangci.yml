@@ -1,3 +1,9 @@
+# service:
+#   prepare:
+#   - export CGO_ENABLED=1
+#   - export GOOS=linux
+#   - export GOARCH=$(go env GOHOSTARCH)
+
 run:
   deadline: 5m
   tests: true
@@ -14,30 +20,60 @@ output:
   sort-results: true
 
 linters:
-  disable-all: true
-  enable:
-  - golint
-  - errcheck
-  - misspell
-  - deadcode
-  - govet
-  - typecheck
-  - lll
-  - megacheck
-  - varcheck
-  - unconvert
-  - bodyclose
-  - scopelint
-  - goimports
-  - ineffassign
-  - gofmt
-  - maligned
+  enable-all: true
+  disable:
+  # All these break for one reason or another
+  - dupl
+  - funlen
+  - gochecknoglobals
+  - gochecknoinits
   - goconst
   - gocyclo
-  - unparam
+  - golint
+  - lll
   - structcheck
-  - staticcheck
+  - typecheck
+  - unconvert
+  - varcheck
+  - deadcode
+  - depguard
+  - errcheck
   - gocritic
+  - gosec
+  - maligned
+  - exhaustivestruct
+  - wrapcheck
+  - wsl
+  - gocognit
+  - nlreturn
+  - godox
+  - gomnd
+  - nestif
+  - goerr113
+  - prealloc
+  # enable:
+  # - golint
+  # - errcheck
+  # - misspell
+  # - deadcode
+  # - govet
+  # - typecheck
+  # - lll
+  # - megacheck
+  # - varcheck
+  # - unconvert
+  # - bodyclose
+  # - scopelint
+  # - goimports
+  # - ineffassign
+  # - gofmt
+  # - maligned
+  # - goconst
+  # - gocyclo
+  # - unparam
+  # - structcheck
+  # - staticcheck
+  # - gocritic
 
 linters-settings:
   govet:

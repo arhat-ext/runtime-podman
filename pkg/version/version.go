@@ -42,17 +42,17 @@ func Version() string {
 	return version
 }
 
-// Branch name of the source code
+// Branch name of the source code.
 func Branch() string {
 	return branch
 }
 
-// Commit hash of the source code
+// Commit hash of the source code.
 func Commit() string {
 	return commit
 }
 
-// Tag the tag name of the source code
+// Tag the tag name of the source code.
 func Tag() string {
 	return tag
 }
