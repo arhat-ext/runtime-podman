@@ -39,14 +39,8 @@ include scripts/image/runtime-podman.mk
 image.build.linux.all: \
 	image.build.runtime-podman.linux.all
 
-image.build.windows.all: \
-	image.build.runtime-podman.windows.all
-
 image.push.linux.all: \
 	image.push.runtime-podman.linux.all
-
-image.push.windows.all: \
-	image.push.runtime-podman.windows.all
 
 # manifest
 include scripts/gen/manifests.mk

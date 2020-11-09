@@ -51,6 +51,7 @@ linters:
   - nestif
   - goerr113
   - prealloc
+  - unused
   # enable:
   # - golint
   # - errcheck

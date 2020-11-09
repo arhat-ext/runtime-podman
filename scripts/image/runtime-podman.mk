@@ -51,16 +51,6 @@ image.build.runtime-podman.linux.all: \
 	image.build.runtime-podman.linux.ppc64le \
 	image.build.runtime-podman.linux.mips64le
 
-image.build.runtime-podman.windows.amd64:
-	sh scripts/image/build.sh $@
-
-image.build.runtime-podman.windows.armv7:
-	sh scripts/image/build.sh $@
-
-image.build.runtime-podman.windows.all: \
-	image.build.runtime-podman.windows.amd64 \
-	image.build.runtime-podman.windows.armv7
-
 # push
 image.push.runtime-podman.linux.x86:
 	sh scripts/image/push.sh $@
@@ -99,13 +89,3 @@ image.push.runtime-podman.linux.all: \
 	image.push.runtime-podman.linux.s390x \
 	image.push.runtime-podman.linux.ppc64le \
 	image.push.runtime-podman.linux.mips64le
-
-image.push.runtime-podman.windows.amd64:
-	sh scripts/image/push.sh $@
-
-image.push.runtime-podman.windows.armv7:
-	sh scripts/image/push.sh $@
-
-image.push.runtime-podman.windows.all: \
-	image.push.runtime-podman.windows.amd64 \
-	image.push.runtime-podman.windows.armv7
