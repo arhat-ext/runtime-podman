@@ -1,6 +1,6 @@
 .test:unit:
   stage: unit-tests
-  image: ghcr.io/arhat-devbase-go:debian
+  image: ghcr.io/arhat-dev/base-go:debian
   script:
   - make test.pkg
   - make test.cmd
