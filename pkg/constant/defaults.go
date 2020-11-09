@@ -16,7 +16,19 @@ limitations under the License.
 
 package constant
 
+import "time"
+
 const (
-	DefaultTemplateGoConfigFile   = "/etc/template-go/config.yaml"
-	DefaultArhatExtensionEndpoint = "unix:///var/run/arhat.sock"
+	DefaultAppConfigFile   = "/etc/arhat/runtime-podman.yaml"
+	DefaultExtensionHubURL = "unix:///var/run/arhat.sock"
+)
+
+const (
+	DefaultPodActionTimeout   = 10 * time.Minute
+	DefaultImageActionTimeout = 15 * time.Minute
+
+	DefaultPodDataDir = "/var/lib/arhat/podman/data"
+
+	DefaultPauseImage   = "k8s.gcr.io/pause:3.3"
+	DefaultPauseCommand = "/pause"
 )

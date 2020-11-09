@@ -1,18 +1,18 @@
 .test:unit:
   stage: unit-tests
-  image: arhatdev/base-go:debian
+  image: ghcr.io/arhat-devbase-go:debian
   script:
   - make test.pkg
   - make test.cmd
   dependencies:
   - stylecheck
 
-test:unit:linux:template-go:
+test:unit:linux:runtime-podman:
   extends: .test:unit
   tags:
   - linux
 
-# test:unit:windows:template-go:
+# test:unit:windows:runtime-podman:
 #   extends: .test:unit
 #   tags:
 #   - windows

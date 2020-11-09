@@ -1,0 +1,91 @@
+---
+# Source: runtime-podman/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: runtime-podman
+  namespace: default
+  labels:
+    helm.sh/chart: runtime-podman-0.1.0
+    app.kubernetes.io/name: runtime-podman
+    app.kubernetes.io/instance: runtime-podman
+    app.kubernetes.io/version: "latest"
+    app.kubernetes.io/managed-by: Helm
+data:
+  config.yaml: |
+    templateGo:
+      endpoint: unix:///var/run/arhat.sock
+      log:
+      - file: stderr
+        format: console
+        level: verbose
+      tls:
+        caCert: /path/to/caCert
+        cert: /path/to/client-cert
+        enabled: false
+        insecureSkipVerify: true
+        key: /path/to/client-cert-key
+---
+# Source: runtime-podman/templates/daemonset.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: runtime-podman
+  namespace: default
+  labels:
+    helm.sh/chart: runtime-podman-0.1.0
+    app.kubernetes.io/name: runtime-podman
+    app.kubernetes.io/instance: runtime-podman
+    app.kubernetes.io/version: "latest"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: runtime-podman
+      app.kubernetes.io/instance: runtime-podman
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: runtime-podman
+        app.kubernetes.io/instance: runtime-podman
+    spec:
+      securityContext:
+        {}
+      tolerations:
+        - key: arhat.dev/namespace
+          value: default
+        - key: node.kubernetes.io/unschedulable
+          operator: Exists
+      containers:
+        - name: arhat-peripheral
+          securityContext:
+            {}
+          image: "ghcr.io/arhat-ext/runtime-podman:latest"
+          imagePullPolicy: IfNotPresent
+          command:
+            - /runtime-podman
+            - -c
+            - /etc/runtime-podman/config.yaml
+          # ports:
+          #   - name: http
+          #     containerPort: 80
+          #     protocol: TCP
+          # livenessProbe:
+          #   httpGet:
+          #     path: /
+          #     port: http
+          # readinessProbe:
+          #   httpGet:
+          #     path: /
+          #     port: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/runtime-podman
+          resources:
+            {}
+      nodeSelector:
+        arhat.dev/namespace: default
+      volumes:
+        - name: config
+          configMap:
+            name: runtime-podman

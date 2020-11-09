@@ -22,10 +22,9 @@ import (
 
 	"arhat.dev/aranya-proto/aranyagopb"
 	"arhat.dev/aranya-proto/aranyagopb/runtimepb"
-	"arhat.dev/pkg/wellknownerrors"
-
 	"arhat.dev/libext/extruntime"
 	"arhat.dev/libext/types"
+	"arhat.dev/pkg/wellknownerrors"
 )
 
 var _ extruntime.RuntimeEngine = (*SampleRuntime)(nil)

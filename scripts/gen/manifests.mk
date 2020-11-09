@@ -14,9 +14,9 @@
 
 NS ?= default
 
-gen.manifests.template-go:
+gen.manifests.runtime-podman:
 	helm template \
-		template-go \
-		cicd/deploy/charts/template-go \
+		runtime-podman \
+		cicd/deploy/charts/runtime-podman \
 		--include-crds --namespace ${NS} --debug \
-		| tee cicd/deploy/kube/template-go.yaml
+		| tee cicd/deploy/kube/runtime-podman.yaml
