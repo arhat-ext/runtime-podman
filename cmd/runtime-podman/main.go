@@ -24,9 +24,14 @@ import (
 
 	"ext.arhat.dev/runtime-podman/pkg/cmd"
 	"ext.arhat.dev/runtime-podman/pkg/version"
+	"github.com/containers/storage/pkg/reexec"
 )
 
 func main() {
+	if reexec.Init() {
+		return
+	}
+
 	rand.Seed(time.Now().UnixNano())
 
 	rootCmd := cmd.NewRuntimePodmanCmd()
