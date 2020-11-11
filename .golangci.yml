@@ -1,8 +1,8 @@
-# service:
-#   prepare:
-#   - export CGO_ENABLED=1
-#   - export GOOS=linux
-#   - export GOARCH=$(go env GOHOSTARCH)
+service:
+  prepare:
+  - export CGO_ENABLED=1
+  - export GOOS=$(go env GOHOSTARCH)
+  - export GOARCH=$(go env GOHOSTARCH)
 
 run:
   deadline: 5m
