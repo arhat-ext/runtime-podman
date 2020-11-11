@@ -23,23 +23,18 @@ import (
 	"io"
 	"os"
 	"runtime"
-	"strings"
 	"time"
 
-	"arhat.dev/aranya-proto/aranyagopb"
-	"arhat.dev/aranya-proto/aranyagopb/runtimepb"
 	"arhat.dev/libext/extruntime"
-	"arhat.dev/libext/types"
 	"arhat.dev/pkg/log"
-	"arhat.dev/pkg/wellknownerrors"
-	"ext.arhat.dev/runtimeutil"
-	"ext.arhat.dev/runtimeutil/storage"
+	"ext.arhat.dev/runtimeutil/containerutil"
+	"ext.arhat.dev/runtimeutil/networkutil"
+	"ext.arhat.dev/runtimeutil/storageutil"
 	libpodconfig "github.com/containers/common/pkg/config"
 	"github.com/containers/podman/v2/libpod"
 	"github.com/containers/podman/v2/libpod/define"
 	libpodimage "github.com/containers/podman/v2/libpod/image"
 	libpodversion "github.com/containers/podman/v2/version"
-	"k8s.io/client-go/tools/remotecommand"
 
 	"ext.arhat.dev/runtime-podman/pkg/conf"
 	"ext.arhat.dev/runtime-podman/pkg/constant"
@@ -49,7 +44,7 @@ import (
 func NewPodmanRuntime(
 	ctx context.Context,
 	logger log.Interface,
-	storage *storage.Client,
+	storage *storageutil.Client,
 	config *conf.RuntimeConfig,
 ) (extruntime.RuntimeEngine, error) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -98,7 +93,7 @@ func NewPodmanRuntime(
 		logger: logger,
 		ctx:    ctx,
 
-		BaseRuntime: runtimeutil.NewBaseRuntime(
+		BaseRuntime: containerutil.NewBaseRuntime(
 			ctx, config.DataDir, config.ImageActionTimeout, config.PodActionTimeout,
 			"podman", libpodversion.Version.String(),
 			runtime.GOOS, "", version.Arch(), "",
@@ -114,7 +109,7 @@ func NewPodmanRuntime(
 		networkClient: nil,
 	}
 
-	rt.networkClient = runtimeutil.NewNetworkClient(rt.handleAbbotExec)
+	rt.networkClient = networkutil.NewClient(rt.handleAbbotExec)
 
 	return rt, nil
 }
@@ -123,7 +118,7 @@ type libpodRuntime struct {
 	logger log.Interface
 
 	ctx context.Context
-	*runtimeutil.BaseRuntime
+	*containerutil.BaseRuntime
 
 	pauseImage   string
 	pauseCommand []string
@@ -131,9 +126,9 @@ type libpodRuntime struct {
 
 	runtimeClient *libpod.Runtime
 	imageClient   *libpodimage.Runtime
-	storageClient *storage.Client
+	storageClient *storageutil.Client
 
-	networkClient *runtimeutil.NetworkClient
+	networkClient *networkutil.Client
 }
 
 func (r *libpodRuntime) handleAbbotExec(ctx context.Context, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -168,15 +163,17 @@ func (r *libpodRuntime) handleAbbotExec(ctx context.Context, env map[string]stri
 
 	cmd := append(ctr.Command(), r.abbotSubCmd)
 	logger.D("executing in abbot container", log.Strings("cmd", cmd))
-	errCh := makeExecErrCh()
-	_, err = r.execInContainer(ctx, ctr, nil, stdout, stderr, cmd, false, nil, errCh)
+	_, errCh, err := r.execInContainer(ctx, ctr, nil, stdout, stderr, cmd, false, nil)
 	if err != nil {
 		return err
 	}
 
 	select {
 	case err := <-errCh:
-		return err
+		if err != nil {
+			return err
+		}
+		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -225,7 +222,7 @@ func (r *libpodRuntime) InitRuntime() error {
 	}
 	for _, pod := range allPods {
 		// only select valid pods
-		if _, ok := pod.Labels()[runtimeutil.ContainerLabelPodUID]; !ok {
+		if _, ok := pod.Labels()[containerutil.ContainerLabelPodUID]; !ok {
 			logger.D("deleting invalid pod", log.String("name", pod.Name()))
 			if err = r.deletePod(context.TODO(), pod); err != nil {
 				logger.I("failed to delete invalid pod", log.Error(err))
@@ -239,7 +236,7 @@ func (r *libpodRuntime) InitRuntime() error {
 				continue
 			}
 
-			if runtimeutil.IsHostNetwork(pod.Labels()) {
+			if containerutil.IsHostNetwork(pod.Labels()) {
 				continue
 			}
 
@@ -250,7 +247,7 @@ func (r *libpodRuntime) InitRuntime() error {
 			}
 
 			for _, ctr := range containers {
-				if ctr.Labels()[runtimeutil.ContainerLabelPodContainerRole] != runtimeutil.ContainerRoleInfra {
+				if ctr.Labels()[containerutil.ContainerLabelPodContainerRole] != containerutil.ContainerRoleInfra {
 					continue
 				}
 
@@ -266,180 +263,4 @@ func (r *libpodRuntime) InitRuntime() error {
 	}
 
 	return nil
-}
-
-// EnsureImages ensure container images.
-func (r *libpodRuntime) EnsureImages(ctx context.Context, options *runtimepb.ImageEnsureCmd) (*runtimepb.ImageStatusListMsg, error) {
-	logger := r.logger.WithFields(log.String("action", "ensureImages"), log.Any("options", options))
-	logger.D("ensuring pod container image(s)")
-
-	allImages := map[string]*runtimepb.ImagePullSpec{
-		r.pauseImage: {PullPolicy: runtimepb.IMAGE_PULL_IF_NOT_PRESENT},
-	}
-
-	for imageName, opt := range options.Images {
-		allImages[imageName] = opt
-	}
-	pulledImages, err := r.ensureImages(ctx, allImages)
-	if err != nil {
-		logger.I("failed to ensure container images", log.Error(err))
-		return nil, err
-	}
-
-	images := make([]*runtimepb.ImageStatusMsg, len(pulledImages))
-	for _, img := range pulledImages {
-		var sha256Hash string
-		digests, err := img.RepoDigests()
-		if err != nil {
-			return nil, err
-		}
-		for _, digest := range digests {
-			idx := strings.LastIndex(digest, "sha256:")
-			if idx > -1 {
-				sha256Hash = digest[idx+7:]
-			}
-		}
-
-		if sha256Hash == "" {
-			continue
-		}
-
-		images = append(images, &runtimepb.ImageStatusMsg{
-			Sha256: sha256Hash,
-			Refs:   []string{img.Tag},
-		})
-	}
-
-	return &runtimepb.ImageStatusListMsg{Images: images}, nil
-}
-
-func (r *libpodRuntime) Exec(
-	ctx context.Context,
-	podUID, container string,
-	stdin io.Reader,
-	stdout, stderr io.Writer,
-	command []string,
-	tty bool,
-	errCh chan<- *aranyagopb.ErrorMsg,
-) (types.ResizeHandleFunc, error) {
-	logger := r.logger.WithFields(
-		log.String("uid", podUID),
-		log.String("container", container),
-		log.String("action", "exec"),
-	)
-	logger.D("exec in pod container")
-
-	ctr, err := r.findContainer(podUID, container)
-	if err != nil {
-		return nil, err
-	}
-
-	return r.execInContainer(ctx, ctr, stdin, stdout, stderr, command, tty, nil, errCh)
-}
-
-func (r *libpodRuntime) Attach(
-	ctx context.Context,
-	podUID, container string,
-	stdin io.Reader,
-	stdout, stderr io.Writer,
-	errCh chan<- *aranyagopb.ErrorMsg,
-) (types.ResizeHandleFunc, error) {
-	logger := r.logger.WithFields(
-		log.String("action", "attach"),
-		log.String("uid", podUID),
-		log.String("container", container),
-	)
-	logger.D("attach to pod container")
-
-	ctr, err := r.findContainer(podUID, container)
-	if err != nil {
-		logger.I("failed to find container", log.Error(err))
-		return nil, err
-	}
-
-	streams := r.translateStreams(stdin, stdout, stderr)
-
-	ch := make(chan remotecommand.TerminalSize)
-
-	go func() {
-		defer func() {
-			close(errCh)
-		}()
-
-		err = ctr.Attach(streams, "", ch)
-		if err != nil {
-			select {
-			case <-ctx.Done():
-			case errCh <- &aranyagopb.ErrorMsg{
-				Kind:        aranyagopb.ERR_COMMON,
-				Description: err.Error(),
-				Code:        0,
-			}:
-			}
-		}
-	}()
-
-	return func(cols, rows uint32) {
-		select {
-		case <-ctx.Done():
-		case ch <- remotecommand.TerminalSize{
-			Width:  uint16(cols),
-			Height: uint16(rows),
-		}:
-		}
-	}, nil
-}
-
-func (r *libpodRuntime) Logs(
-	ctx context.Context,
-	options *aranyagopb.LogsCmd,
-	stdout, stderr io.Writer,
-) error {
-	ctr, err := r.findContainer(options.PodUid, options.Container)
-	if err != nil {
-		return err
-	}
-
-	err = runtimeutil.ReadLogs(ctx, ctr.LogPath(), options, stdout, stderr)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (r *libpodRuntime) PortForward(
-	ctx context.Context,
-	podUID, protocol string,
-	port int32,
-	upstream io.Reader,
-	downstream io.Writer,
-) error {
-	logger := r.logger.WithFields(
-		log.String("action", "portforward"),
-		log.String("proto", protocol),
-		log.Int32("port", port),
-		log.String("uid", podUID),
-	)
-	logger.D("port-forwarding to pod container")
-
-	pauseCtr, err := r.findContainer(podUID, runtimeutil.ContainerNamePause)
-	if err != nil {
-		logger.I("failed to find pause container", log.Error(err))
-		return wellknownerrors.ErrNotFound
-	}
-
-	addresses, plainErr := pauseCtr.IPs()
-	if plainErr != nil {
-		logger.I("failed to get container ips", log.Error(err))
-	}
-
-	var address string
-	for _, addr := range addresses {
-		if !addr.IP.IsLoopback() {
-			address = addr.String()
-		}
-	}
-
-	return runtimeutil.PortForward(ctx, address, protocol, port, upstream, downstream)
 }

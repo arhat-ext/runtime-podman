@@ -20,14 +20,61 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"arhat.dev/aranya-proto/aranyagopb/runtimepb"
+	"arhat.dev/pkg/log"
 	"arhat.dev/pkg/wellknownerrors"
 	imagetypes "github.com/containers/image/v5/types"
 	libpodimage "github.com/containers/podman/v2/libpod/image"
 	libpodutil "github.com/containers/podman/v2/pkg/util"
 	imagespec "github.com/opencontainers/image-spec/specs-go/v1"
 )
+
+// EnsureImages ensure container images.
+func (r *libpodRuntime) EnsureImages(ctx context.Context, options *runtimepb.ImageEnsureCmd) (*runtimepb.ImageStatusListMsg, error) {
+	logger := r.logger.WithFields(log.String("action", "ensureImages"), log.Any("options", options))
+	logger.D("ensuring pod container image(s)")
+
+	allImages := map[string]*runtimepb.ImagePullSpec{
+		r.pauseImage: {PullPolicy: runtimepb.IMAGE_PULL_IF_NOT_PRESENT},
+	}
+
+	for imageName, opt := range options.Images {
+		allImages[imageName] = opt
+	}
+	pulledImages, err := r.ensureImages(ctx, allImages)
+	if err != nil {
+		logger.I("failed to ensure container images", log.Error(err))
+		return nil, err
+	}
+
+	images := make([]*runtimepb.ImageStatusMsg, len(pulledImages))
+	for _, img := range pulledImages {
+		var sha256Hash string
+		digests, err := img.RepoDigests()
+		if err != nil {
+			return nil, err
+		}
+		for _, digest := range digests {
+			idx := strings.LastIndex(digest, "sha256:")
+			if idx > -1 {
+				sha256Hash = digest[idx+7:]
+			}
+		}
+
+		if sha256Hash == "" {
+			continue
+		}
+
+		images = append(images, &runtimepb.ImageStatusMsg{
+			Sha256: sha256Hash,
+			Refs:   []string{img.Tag},
+		})
+	}
+
+	return &runtimepb.ImageStatusListMsg{Images: images}, nil
+}
 
 func (r *libpodRuntime) DeleteImages(
 	ctx context.Context, options *runtimepb.ImageDeleteCmd,

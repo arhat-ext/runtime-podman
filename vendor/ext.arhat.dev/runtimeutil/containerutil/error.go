@@ -14,14 +14,21 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package pipenet
+package containerutil
 
-import (
-	"golang.org/x/sys/unix"
-)
+import "fmt"
 
-const syscallRead = 3
+func CollectErrors(errCh <-chan error) error {
+	var errAll error
+	for err := range errCh {
+		if err != nil {
+			if errAll != nil {
+				errAll = fmt.Errorf("%s; %w", errAll.Error(), err)
+			} else {
+				errAll = err
+			}
+		}
+	}
 
-func mkfifo(path string, perm uint32) error {
-	return unix.Mkfifo(path, perm)
+	return errAll
 }

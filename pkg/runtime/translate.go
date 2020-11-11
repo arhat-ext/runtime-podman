@@ -25,7 +25,7 @@ import (
 	"arhat.dev/aranya-proto/aranyagopb/aranyagoconst"
 	"arhat.dev/aranya-proto/aranyagopb/runtimepb"
 	"arhat.dev/pkg/iohelper"
-	"ext.arhat.dev/runtimeutil"
+	"ext.arhat.dev/runtimeutil/containerutil"
 	"github.com/containers/podman/v2/libpod"
 	"github.com/containers/podman/v2/libpod/define"
 )
@@ -45,8 +45,7 @@ func (r *libpodRuntime) doHookAction(ctx context.Context, ctr *libpod.Container,
 	switch action := hook.Action.(type) {
 	case *runtimepb.ContainerAction_Exec_:
 		if cmd := action.Exec.Command; len(cmd) > 0 {
-			errCh := makeExecErrCh()
-			_, err := r.execInContainer(ctx, ctr, nil, os.Stdout, os.Stderr, cmd, false, nil, errCh)
+			_, errCh, err := r.execInContainer(ctx, ctr, nil, os.Stdout, os.Stderr, cmd, false, nil)
 			if err != nil {
 				return err
 			}
@@ -54,8 +53,11 @@ func (r *libpodRuntime) doHookAction(ctx context.Context, ctr *libpod.Container,
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case err = <-errCh:
-				return err
+			case err := <-errCh:
+				if err != nil {
+					return err
+				}
+				return nil
 			}
 		}
 	case *runtimepb.ContainerAction_Http:
@@ -82,13 +84,13 @@ func (r *libpodRuntime) translatePodStatus(
 	pauseCtr *libpod.Container,
 	containers []*libpod.Container,
 ) (*runtimepb.PodStatusMsg, error) {
-	podUID := pauseCtr.Labels()[runtimeutil.ContainerLabelPodUID]
+	podUID := pauseCtr.Labels()[containerutil.ContainerLabelPodUID]
 	ctrStatus := make(map[string]*runtimepb.ContainerStatus)
 
 	for _, ctr := range containers {
 		labels := ctr.Labels()
-		ctrPodUID := labels[runtimeutil.ContainerLabelPodUID]
-		name := labels[runtimeutil.ContainerLabelPodContainer]
+		ctrPodUID := labels[containerutil.ContainerLabelPodUID]
+		name := labels[containerutil.ContainerLabelPodContainer]
 		if name == "" || ctrPodUID != podUID {
 			// invalid container, skip
 			continue

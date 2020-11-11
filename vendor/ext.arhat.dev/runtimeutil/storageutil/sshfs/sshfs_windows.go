@@ -1,3 +1,5 @@
+// +build !nostorage_sshfs
+
 /*
 Copyright 2020 The arhat.dev Authors.
 
@@ -14,33 +16,42 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package main
+package sshfs
 
 import (
 	"fmt"
-	"math/rand"
-	"os"
-	"time"
 
-	"github.com/containers/storage/pkg/reexec"
-
-	"ext.arhat.dev/runtime-podman/pkg/cmd"
-	"ext.arhat.dev/runtime-podman/pkg/version"
+	"ext.arhat.dev/runtimeutil/storageutil"
 )
 
-func main() {
-	if reexec.Init() {
-		return
-	}
+func init() {
+	storageutil.Register(
+		"sshfs",
+		func(config interface{}) (storageutil.Interface, error) {
+			return New(config)
+		},
+		func() interface{} {
+			return new(Config)
+		},
+	)
+}
 
-	rand.Seed(time.Now().UnixNano())
+type Config struct {
+	// TBD
+}
 
-	rootCmd := cmd.NewRuntimePodmanCmd()
-	rootCmd.AddCommand(version.NewVersionCmd())
+func New(cfg interface{}) (*Driver, error) {
+	return nil, fmt.Errorf("not supported")
+}
 
-	err := rootCmd.Execute()
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "failed to run runtime-podman %v: %v\n", os.Args, err)
-		os.Exit(1)
-	}
+type Driver struct {
+	// TBD
+}
+
+func (d *Driver) GetMountCmd(remotePath, mountPoint string) []string {
+	return nil
+}
+
+func (d *Driver) GetUnmountCmd(mountPoint string) []string {
+	return nil
 }

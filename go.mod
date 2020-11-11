@@ -5,9 +5,9 @@ go 1.15
 require (
 	arhat.dev/aranya-proto v0.2.3
 	arhat.dev/arhat-proto v0.4.2
-	arhat.dev/libext v0.4.1
-	arhat.dev/pkg v0.3.1
-	ext.arhat.dev/runtimeutil v0.1.2
+	arhat.dev/libext v0.4.3
+	arhat.dev/pkg v0.3.5
+	ext.arhat.dev/runtimeutil v0.1.4
 	github.com/containers/common v0.26.2
 	github.com/containers/image/v5 v5.7.0
 	github.com/containers/podman/v2 v2.1.1

@@ -9,7 +9,8 @@ import (
 	"arhat.dev/aranya-proto/aranyagopb/runtimepb"
 	"arhat.dev/pkg/log"
 	"arhat.dev/pkg/wellknownerrors"
-	"ext.arhat.dev/runtimeutil"
+	"ext.arhat.dev/runtimeutil/containerutil"
+	"ext.arhat.dev/runtimeutil/storageutil"
 	"github.com/containers/podman/v2/libpod"
 	"github.com/containers/podman/v2/libpod/define"
 )
@@ -24,7 +25,7 @@ func (r *libpodRuntime) EnsurePod(ctx context.Context, options *runtimepb.PodEns
 
 		if err != nil {
 			logger.D("cleaning up pod data")
-			err2 := runtimeutil.CleanupPodData(
+			err2 := storageutil.CleanupPodData(
 				r.PodDir(options.PodUid),
 				r.PodRemoteVolumeDir(options.PodUid, ""),
 				r.PodTmpfsVolumeDir(options.PodUid, ""),
@@ -61,7 +62,7 @@ func (r *libpodRuntime) EnsurePod(ctx context.Context, options *runtimepb.PodEns
 	} else {
 		// pod is there, pause container should present
 		logger.V("found pod, check pause container")
-		pauseCtr, err = r.findContainer(options.PodUid, runtimeutil.ContainerNamePause)
+		pauseCtr, err = r.findContainer(options.PodUid, containerutil.ContainerNamePause)
 		if err != nil {
 			logger.I("deleting invalid pod without pause container")
 			if err2 := r.deletePod(context.TODO(), pod); err2 != nil {
@@ -123,7 +124,7 @@ func (r *libpodRuntime) EnsurePod(ctx context.Context, options *runtimepb.PodEns
 		logger.V("creating container", log.String("name", spec.Name))
 
 		var ctr *libpod.Container
-		ctr, err = r.createContainer(ctx, options, pod, spec, runtimeutil.SharedNamespaces(pauseCtr.ID(), options))
+		ctr, err = r.createContainer(ctx, options, pod, spec, containerutil.SharedNamespaces(pauseCtr.ID(), options))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create container: %w", err)
 		}
@@ -184,7 +185,7 @@ func (r *libpodRuntime) DeletePod(ctx context.Context, options *runtimepb.PodDel
 
 	defer func() {
 		logger.D("cleaning up pod data")
-		err := runtimeutil.CleanupPodData(
+		err := storageutil.CleanupPodData(
 			r.PodDir(options.PodUid),
 			r.PodRemoteVolumeDir(options.PodUid, ""),
 			r.PodTmpfsVolumeDir(options.PodUid, ""),
@@ -216,7 +217,7 @@ func (r *libpodRuntime) DeletePod(ctx context.Context, options *runtimepb.PodDel
 		var pauseCtr *libpod.Container
 		ctrs, _ := pod.AllContainers()
 		for _, c := range ctrs {
-			if runtimeutil.IsPauseContainer(c.Labels()) {
+			if containerutil.IsPauseContainer(c.Labels()) {
 				pauseCtr = c
 				break
 			}
@@ -250,7 +251,7 @@ func (r *libpodRuntime) ListPods(ctx context.Context, options *runtimepb.PodList
 	if !options.All {
 		if len(options.Names) > 0 {
 			// TODO: support multiple names lookup
-			filters[runtimeutil.ContainerLabelPodName] = options.Names[0]
+			filters[containerutil.ContainerLabelPodName] = options.Names[0]
 		}
 	}
 
@@ -266,7 +267,7 @@ func (r *libpodRuntime) ListPods(ctx context.Context, options *runtimepb.PodList
 
 	var results []*runtimepb.PodStatusMsg
 	for _, pod := range pods {
-		podUID, ok := pod.Labels()[runtimeutil.ContainerLabelPodUID]
+		podUID, ok := pod.Labels()[containerutil.ContainerLabelPodUID]
 		if !ok {
 			logger.D("deleting invalid pod", log.String("name", pod.Name()))
 			if err := r.deletePod(context.TODO(), pod); err != nil {
@@ -276,7 +277,7 @@ func (r *libpodRuntime) ListPods(ctx context.Context, options *runtimepb.PodList
 		}
 
 		logger.D("looking up pause container", log.String("podUID", podUID))
-		pauseCtr, err := r.findContainer(podUID, runtimeutil.ContainerNamePause)
+		pauseCtr, err := r.findContainer(podUID, containerutil.ContainerNamePause)
 		if err != nil {
 			// in libpod, pod is separated from the containers, it's highly possible we didn't
 			// create any container in this pod, so just delete it silently
@@ -291,7 +292,7 @@ func (r *libpodRuntime) ListPods(ctx context.Context, options *runtimepb.PodList
 		var abbotRespBytes []byte
 		// force sync
 		_ = pauseCtr.Sync()
-		if runtimeutil.IsHostNetwork(pauseCtr.Labels()) {
+		if containerutil.IsHostNetwork(pauseCtr.Labels()) {
 			logger.D("looking up pod ip for non-host network pod")
 			pid, _ := pauseCtr.PID()
 			abbotRespBytes, err = r.networkClient.Query(actionCtx, int64(pid), pauseCtr.ID())

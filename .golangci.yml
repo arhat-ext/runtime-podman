@@ -11,7 +11,8 @@ run:
   skip-dirs:
   - vendor
   - private
-  build-tags: []
+  build-tags:
+  - containers_image_openpgp
 
 output:
   format: colored-line-number
@@ -52,6 +53,8 @@ linters:
   - goerr113
   - prealloc
   - unused
+  - exhaustive
+
   # enable:
   # - golint
   # - errcheck

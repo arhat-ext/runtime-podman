@@ -28,11 +28,13 @@ import (
 	_ "arhat.dev/libext/codec/codecpb"
 	"arhat.dev/libext/extruntime"
 	"arhat.dev/pkg/log"
-	"ext.arhat.dev/runtimeutil/storage"
+	"ext.arhat.dev/runtimeutil/storageutil"
 
-	// Add sotrage drivers.
-	_ "ext.arhat.dev/runtimeutil/storage/general"
-	_ "ext.arhat.dev/runtimeutil/storage/sshfs"
+	// Add general sotrage driver.
+	_ "ext.arhat.dev/runtimeutil/storageutil/general"
+
+	// Add sshfs sotrage driver.
+	_ "ext.arhat.dev/runtimeutil/storageutil/sshfs"
 	"github.com/spf13/cobra"
 
 	"ext.arhat.dev/runtime-podman/pkg/conf"
@@ -76,7 +78,7 @@ func NewRuntimePodmanCmd() *cobra.Command {
 		"path to the config file")
 	flags.AddFlagSet(conf.FlagsForApp("", &config.App))
 	flags.AddFlagSet(conf.FlagsForRuntime("runtime.", &config.Runtime))
-	flags.AddFlagSet(storage.FlagsForClient("storage.", &config.Storage))
+	flags.AddFlagSet(storageutil.FlagsForClient("storage.", &config.Storage))
 
 	return runtimePodmanCmd
 }
@@ -118,7 +120,11 @@ func run(appCtx context.Context, config *conf.Config) error {
 	}
 
 	ctrl, err := libext.NewController(appCtx, log.Log.WithName("controller"), c.Marshal,
-		extruntime.NewHandler(log.Log.WithName("handler"), rt),
+		extruntime.NewHandler(
+			log.Log.WithName("handler"),
+			config.App.MaxDataMessagePayload,
+			rt,
+		),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create extension controller: %w", err)
