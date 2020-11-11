@@ -7,7 +7,7 @@ require (
 	arhat.dev/arhat-proto v0.4.2
 	arhat.dev/libext v0.4.3
 	arhat.dev/pkg v0.3.5
-	ext.arhat.dev/runtimeutil v0.1.4
+	ext.arhat.dev/runtimeutil v0.1.5
 	github.com/containers/common v0.26.2
 	github.com/containers/image/v5 v5.7.0
 	github.com/containers/podman/v2 v2.1.1
