@@ -5,9 +5,9 @@ go 1.15
 require (
 	arhat.dev/aranya-proto v0.2.3
 	arhat.dev/arhat-proto v0.4.2
-	arhat.dev/libext v0.4.3
-	arhat.dev/pkg v0.3.5
-	ext.arhat.dev/runtimeutil v0.1.5
+	arhat.dev/libext v0.4.7
+	arhat.dev/pkg v0.4.2
+	ext.arhat.dev/runtimeutil v0.2.2
 	github.com/containers/common v0.26.2
 	github.com/containers/image/v5 v5.7.0
 	github.com/containers/podman/v2 v2.1.1
@@ -18,7 +18,7 @@ require (
 	github.com/spf13/pflag v1.0.5
 	go.uber.org/multierr v1.6.0
 	gopkg.in/yaml.v2 v2.3.0
-	k8s.io/client-go v0.18.10
+	k8s.io/client-go v0.19.4
 )
 
 // podman v2.1.1

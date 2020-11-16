@@ -14,6 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package libext provides client and controller for creating extension
-// controllers with arhat-proto
-package libext
+// Package codecjson uses stdlib json for libext
+package stdjson
+
+import (
+	"arhat.dev/arhat-proto/arhatgopb"
+
+	"arhat.dev/libext/codec"
+)
+
+func init() {
+	codec.Register(arhatgopb.CODEC_JSON, new(Codec))
+}

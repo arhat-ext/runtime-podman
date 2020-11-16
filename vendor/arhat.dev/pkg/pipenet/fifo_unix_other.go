@@ -1,3 +1,5 @@
+// +build aix solaris
+
 /*
 Copyright 2020 The arhat.dev Authors.
 
@@ -14,6 +16,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package libext provides client and controller for creating extension
-// controllers with arhat-proto
-package libext
+package pipenet
+
+import (
+	"golang.org/x/sys/unix"
+)
+
+const syscallRead = 3
+
+func mkfifo(path string, perm uint32) error {
+	return unix.Mkfifo(path, perm)
+}

@@ -23,18 +23,9 @@ import (
 	"arhat.dev/arhat-proto/arhatgopb"
 	"arhat.dev/libext"
 	"arhat.dev/libext/codec"
-
-	// Add protobuf codec support.
-	_ "arhat.dev/libext/codec/codecpb"
 	"arhat.dev/libext/extruntime"
 	"arhat.dev/pkg/log"
 	"ext.arhat.dev/runtimeutil/storageutil"
-
-	// Add general sotrage driver.
-	_ "ext.arhat.dev/runtimeutil/storageutil/general"
-
-	// Add sshfs sotrage driver.
-	_ "ext.arhat.dev/runtimeutil/storageutil/sshfs"
 	"github.com/spf13/cobra"
 
 	"ext.arhat.dev/runtime-podman/pkg/conf"
@@ -93,7 +84,10 @@ func run(appCtx context.Context, config *conf.Config) error {
 		return fmt.Errorf("failed to create tls config: %w", err)
 	}
 
-	c := codec.GetCodec(arhatgopb.CODEC_PROTOBUF)
+	c, ok := codec.Get(arhatgopb.CODEC_PROTOBUF)
+	if !ok {
+		return fmt.Errorf("protobuf codec not found: %w", err)
+	}
 	client, err := libext.NewClient(
 		appCtx,
 		arhatgopb.EXTENSION_RUNTIME,

@@ -22,6 +22,26 @@ import (
 	"os"
 	"time"
 
+	// add protobuf codec support.
+	_ "arhat.dev/libext/codec/gogoprotobuf"
+
+	// add json codec support.
+	_ "arhat.dev/libext/codec/stdjson"
+
+	// add udp dtls network support.
+	_ "arhat.dev/pkg/nethelper/piondtls"
+
+	// add pipe network support.
+	_ "arhat.dev/pkg/nethelper/pipenet"
+
+	// add standard library network support.
+	_ "arhat.dev/pkg/nethelper/stdnet"
+
+	// add general sotrage driver.
+	_ "ext.arhat.dev/runtimeutil/storageutil/general"
+
+	// add sshfs sotrage driver.
+	_ "ext.arhat.dev/runtimeutil/storageutil/sshfs"
 	"github.com/containers/storage/pkg/reexec"
 
 	"ext.arhat.dev/runtime-podman/pkg/cmd"

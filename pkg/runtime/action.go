@@ -19,6 +19,8 @@ package runtime
 import (
 	"context"
 	"io"
+	"net"
+	"strconv"
 
 	"arhat.dev/aranya-proto/aranyagopb"
 	"arhat.dev/libext/types"
@@ -167,5 +169,12 @@ func (r *libpodRuntime) PortForward(
 		}
 	}
 
-	return nethelper.PortForward(ctx, nil, address, protocol, port, upstream, nil)
+	return nethelper.Forward(
+		ctx,
+		nil,
+		protocol,
+		net.JoinHostPort(address, strconv.FormatInt(int64(port), 10)),
+		upstream,
+		nil,
+	)
 }

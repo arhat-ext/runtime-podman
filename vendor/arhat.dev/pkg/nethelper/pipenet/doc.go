@@ -14,6 +14,5 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package libext provides client and controller for creating extension
-// controllers with arhat-proto
-package libext
+// Package pipenet register pipe with tls support
+package pipenet

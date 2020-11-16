@@ -1,3 +1,5 @@
+// +build !nonethelper
+
 /*
 Copyright 2020 The arhat.dev Authors.
 
@@ -14,6 +16,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package libext provides client and controller for creating extension
-// controllers with arhat-proto
-package libext
+package nethelper
+
+import (
+	"context"
+	"net"
+)
+
+type (
+	ListenFunc func(
+		ctx context.Context,
+		config interface{},
+		network, addr string,
+		tlsConfig interface{},
+	) (interface{}, error)
+
+	DialFunc func(
+		ctx context.Context,
+		dialer interface{},
+		network, addr string,
+		tlsConfig interface{},
+	) (net.Conn, error)
+)
